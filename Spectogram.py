@@ -13,6 +13,7 @@ from pathlib import Path
 from numba import njit
 from microphone import record_audio
 from microphone.config import settings
+from collections import Counter
 
 import librosa
 
@@ -326,3 +327,85 @@ class Spectogram:
             print(f"[{song_id}] {path.name}: {len(peaks)} peaks")
 
         return database, song_index
+    
+    def build_training_song_database(
+        songs_folder: str,
+        fanout: int = 15,
+        percentile: float = 75,
+        max_dt: int = None,
+    ) -> Tuple[Dict[DatabaseKey, List[DatabaseEntry]], Dict[int, str]]:
+        """
+        Returns
+        -------
+        database : Dict[(f_i, f_j, dt), List[(song_id, t_i)]]
+        song_index : Dict[song_id, song_name]
+            Lets you map a matched song_id back to its name.
+        """
+        songs_folder = Path(songs_folder)
+        database: Dict[DatabaseKey, List[DatabaseEntry]] = {}
+        song_index: Dict[int, str] = {}
+        mp3_files = sorted(songs_folder.glob("*.mp3"))
+
+        for song_id, path in enumerate(mp3_files):
+            song_index[song_id] = path.stem  # e.g. "Malcom_Todd_Earrings"
+            #samples, sr = librosa.load(path, sr=44100, mono=True)
+
+            try:
+                samples, sr = librosa.load(path, sr=44100, mono=True)
+            except Exception as e:
+                print(f"Skipping {path.name}: {e}")
+                continue
+            
+            log_S = np.log(get_spectrogram(samples, sr) + 1e-12)
+
+            amp_min = np.percentile(log_S.flatten(), percentile)
+            neighborhood = generate_binary_structure(rank=2, connectivity=2)
+            peaks = local_peak_locations(log_S, neighborhood, amp_min=amp_min)
+
+            for key, t_m in fanout_pairs(peaks, fanout=fanout, max_dt=max_dt):
+                database.setdefault(key, []).append((song_id, t_m))
+
+            print(f"[{song_id}] {path.name}: {len(peaks)} peaks")
+
+        return database, song_index
+    
+
+    
+    def record_and_get_spectrogram(duration: float):
+        p = pyaudio.PyAudio()
+        device = p.get_device_info_by_index(0)
+        p.terminate()
+
+        frames, sr = record_audio(duration, device=device)
+        samples = np.hstack([np.frombuffer(i, np.int16) for i in frames])
+
+        S, freqs, times = mlab.specgram(
+            samples,
+            NFFT=4096,
+            Fs=44100,
+            window=mlab.window_hanning,
+            noverlap=int(4096 / 2),
+            mode="magnitude",
+        )
+        return S
+    
+    def match_fingerprint(recording_fp, database, song_index):
+        votes = Counter()
+        for key, t_record in recording_fp.items():
+            # hash not in database
+            if key not in database:
+                continue
+            # every occurrence of this hash
+            for song_id, t_song in database[key]:
+                # align the songs by their starting point
+                offset = t_song - t_record
+                votes[(song_id, offset)] += 1
+        if not votes:
+            return None
+        (best_song, best_offset), score = votes.most_common(1)[0]
+        
+        return {
+            "song": song_index[best_song],
+            "votes": score,
+            "offset": best_offset,
+        }
