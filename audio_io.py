@@ -14,3 +14,4 @@ def load_and_parse(file_path):
     sample_rate = int(array[0])
     samples = array[1:]
     return samples, sample_rate
+
