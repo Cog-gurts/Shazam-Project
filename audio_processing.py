@@ -1,4 +1,5 @@
 import numpy as np
+import librosa
 
 def samples_to_frequency(samples, sample_rate):
 
@@ -6,3 +7,9 @@ def samples_to_frequency(samples, sample_rate):
     amps = np.abs(coeffs) #each freqency strength
     freqs = np.fft.rfftfreq(len(samples), 1 / sample_rate) #hz frequency from coeffs indexes
     return freqs, amps, coeffs
+
+def extract_samples(filepath):
+    audio_array, rate = librosa.load(filepath)
+    print(audio_array.shape)
+
+
